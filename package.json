@@ -1,0 +1,13 @@
+{
+  "name": "akn",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "https://github.com/sgiraz/akn.git",
+  "author": "Simone Girardi <simone.girardi@iit.it>",
+  "license": "GPLv3",
+  "private": true,
+  "dependencies": {
+    "@types/node": "^18.16.3",
+    "axios": "^1.4.0"
+  }
+}
