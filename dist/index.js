@@ -19943,9 +19943,9 @@ function countToLevel(count) {
 }
 
 // src/simulation.ts
-var DT = 4;
+var DT = 6;
 var BALL_SPEED = 5;
-var MAX_DURATION = 25e3;
+var MAX_DURATION = 35e3;
 var PADDLE_LERP = 0.12;
 var TARGET_PHASE_THRESHOLD = 0.3;
 function simulateArkanoid(grid) {
