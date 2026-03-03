@@ -1,0 +1,22 @@
+name: "Arkanoid Contribution Graph"
+description: "Generates an Arkanoid-style animated SVG from a GitHub contribution graph"
+author: "sgiraz"
+
+inputs:
+  github_user_name:
+    description: "GitHub username to generate the contribution graph for"
+    required: true
+  outputs:
+    description: |
+      Output SVG file paths, one per line.
+      Append ?palette=github-dark for dark mode variant.
+    required: true
+    default: "dist/github-contribution-arkanoid.svg"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"
+
+branding:
+  icon: "grid"
+  color: "green"

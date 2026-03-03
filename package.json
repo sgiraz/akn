@@ -1,13 +1,19 @@
 {
   "name": "akn",
   "version": "1.0.0",
-  "main": "index.js",
-  "repository": "https://github.com/sgiraz/akn.git",
-  "author": "Simone Girardi <simone.girardi@iit.it>",
-  "license": "GPLv3",
+  "description": "Generates an Arkanoid-style animated SVG from a GitHub contribution graph",
   "private": true,
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
-    "@types/node": "^18.16.3",
-    "axios": "^1.4.0"
-  }
+    "@actions/core": "^1.10.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0"
+  },
+  "license": "MIT"
 }

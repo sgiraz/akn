@@ -1,11 +1,15 @@
 {
-    "compilerOptions": {
-        "target": "es5",
-        "module": "commonjs",
-        "outDir": "dist",
-        "sourceMap": true,
-        "strict": true,
-        "esModuleInterop": true,
-        "forceConsistentCasingInFileNames": true
-    }
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*"]
 }
