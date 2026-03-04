@@ -8,7 +8,7 @@ import {
 
 const DT = 6; // ms per simulation step
 const BALL_SPEED = 5; // px per step
-const MAX_DURATION = 35000;
+const MAX_DURATION = 60000;
 const PADDLE_LERP = 0.12;
 const TARGET_PHASE_THRESHOLD = 0.3; // switch to targeting when <30% bricks remain
 
