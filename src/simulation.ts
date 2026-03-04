@@ -2,7 +2,7 @@ import { ContributionGrid, SimFrame, SimResult, BallState } from "./types";
 import {
   COLS, ROWS, CELL_SIZE, CELL_SPACING, CELL_OFFSET,
   AREA_LEFT, AREA_RIGHT, AREA_TOP,
-  PADDLE_Y, PADDLE_WIDTH, BALL_RADIUS,
+  PADDLE_Y, PADDLE_WIDTH, PADDLE_HEIGHT, BALL_RADIUS,
   cellX, cellY,
 } from "./grid";
 
@@ -144,20 +144,32 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
             ball.vy = (tdy / tdist) * BALL_SPEED;
           }
         } else {
-          // Normal bounce with angle variation from paddle hit position
+          // Normal bounce: blend paddle hit position with incoming direction
+          // hitOffset alone determines angle in classic Arkanoid, but looks
+          // unnatural when the ball reverses horizontal direction on contact.
+          // We mix 60% hit-position influence with 40% incoming-velocity
+          // reflection so the ball's horizontal direction stays plausible.
           const baseAngle = -Math.PI / 2;
           const angleRange = Math.PI / 3;
-          const launchAngle = baseAngle + hitOffset * angleRange;
-          ball.vx = Math.cos(launchAngle) * BALL_SPEED;
-          ball.vy = Math.sin(launchAngle) * BALL_SPEED;
+          const positionAngle = baseAngle + hitOffset * angleRange;
+
+          // Reflect incoming angle (mirror vy, keep vx)
+          const incomingAngle = Math.atan2(-Math.abs(ball.vy), ball.vx);
+
+          const blendedAngle = positionAngle * 0.6 + incomingAngle * 0.4;
+
+          // Ensure ball always goes upward after paddle hit
+          ball.vx = Math.cos(blendedAngle) * BALL_SPEED;
+          ball.vy = -Math.abs(Math.sin(blendedAngle) * BALL_SPEED);
         }
 
         bounced = true;
       }
     }
 
-    // Ball falls below paddle - reset
-    if (ball.y > PADDLE_Y + 30) {
+    // Ball falls below paddle - reset immediately
+    // Use a tight threshold so no frames show the ball below the paddle
+    if (ball.y + BALL_RADIUS > PADDLE_Y + PADDLE_HEIGHT && ball.vy > 0) {
       ball.y = PADDLE_Y - BALL_RADIUS;
       ball.vy = -Math.abs(ball.vy);
 

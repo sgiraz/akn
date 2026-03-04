@@ -20050,14 +20050,16 @@ function simulateArkanoid(grid) {
         } else {
           const baseAngle = -Math.PI / 2;
           const angleRange = Math.PI / 3;
-          const launchAngle = baseAngle + hitOffset * angleRange;
-          ball.vx = Math.cos(launchAngle) * BALL_SPEED;
-          ball.vy = Math.sin(launchAngle) * BALL_SPEED;
+          const positionAngle = baseAngle + hitOffset * angleRange;
+          const incomingAngle = Math.atan2(-Math.abs(ball.vy), ball.vx);
+          const blendedAngle = positionAngle * 0.6 + incomingAngle * 0.4;
+          ball.vx = Math.cos(blendedAngle) * BALL_SPEED;
+          ball.vy = -Math.abs(Math.sin(blendedAngle) * BALL_SPEED);
         }
         bounced = true;
       }
     }
-    if (ball.y > PADDLE_Y + 30) {
+    if (ball.y + BALL_RADIUS > PADDLE_Y + PADDLE_HEIGHT && ball.vy > 0) {
       ball.y = PADDLE_Y - BALL_RADIUS;
       ball.vy = -Math.abs(ball.vy);
       if (activeBricks.size > 0) {
