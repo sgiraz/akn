@@ -7,10 +7,13 @@ import {
 } from "./grid";
 
 const DT = 6; // ms per simulation step
-const BALL_SPEED = 5; // px per step
-const MAX_DURATION = 60000;
-const PADDLE_LERP = 0.12;
-const TARGET_PHASE_THRESHOLD = 0.3; // switch to targeting when <30% bricks remain
+const BALL_SPEED = 3.5; // px per step
+const FLOOR_Y = PADDLE_Y + 20; // invisible floor below paddle for missed balls
+
+// Paddle bounce: angle varies based on hit position
+// Center hit → 90° (straight up), edge hit → ~30° from horizontal
+const PADDLE_MIN_ANGLE = Math.PI * 0.15; // ~27° from horizontal (extreme edge)
+const PADDLE_MAX_ANGLE = Math.PI * 0.85; // ~153° from horizontal (other extreme edge)
 
 interface ActiveBrick {
   col: number;
@@ -21,9 +24,41 @@ interface ActiveBrick {
   y: number;
 }
 
+// Simple seeded PRNG for deterministic "randomness"
+function createRng(seed: number) {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
+function computeMaxDuration(totalBricks: number, totalHP: number): number {
+  // Account for both brick count (travel time) and HP (hits needed)
+  const estimate = totalBricks * 800 + totalHP * 200;
+  return Math.max(30000, Math.min(120000, estimate));
+}
+
+// Predict where the ball will intersect a given Y level (simple linear projection)
+function predictBallX(ball: BallState, targetY: number): number {
+  if (ball.vy <= 0) return ball.x; // ball moving up, no prediction
+  const dt = (targetY - ball.y) / ball.vy;
+  let px = ball.x + ball.vx * dt;
+  // Simulate wall bounces for the prediction
+  const width = AREA_RIGHT - AREA_LEFT - BALL_RADIUS * 2;
+  const left = AREA_LEFT + BALL_RADIUS;
+  px -= left;
+  // Fold the position back into bounds (mirror reflections)
+  const cycle = width * 2;
+  px = ((px % cycle) + cycle) % cycle;
+  if (px > width) px = cycle - px;
+  return px + left;
+}
+
 export function simulateArkanoid(grid: ContributionGrid): SimResult {
   // Collect active bricks (level > 0)
   const activeBricks = new Map<string, ActiveBrick>();
+  let totalHP = 0;
   for (let col = 0; col < COLS; col++) {
     for (let row = 0; row < ROWS; row++) {
       const cell = grid[col][row];
@@ -33,6 +68,7 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
           col, row, level: cell.level, hp: cell.level,
           x: cellX(col), y: cellY(row),
         });
+        totalHP += cell.level;
       }
     }
   }
@@ -42,20 +78,25 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
     return { frames: [], duration: 1000 };
   }
 
-  // Initial ball state: center-bottom, moving up-right
-  const angle = -Math.PI / 3; // 60 degrees upward
+  const maxDuration = computeMaxDuration(totalBricks, totalHP);
+  const rng = createRng(totalHP * 7 + totalBricks * 13);
+
+  // Initial ball state: center-bottom, moving up at a slight angle
+  const startAngle = -Math.PI / 2 + (rng() - 0.5) * 0.4; // ~90° ± 12°
   const ball: BallState = {
     x: (AREA_LEFT + AREA_RIGHT) / 2,
     y: PADDLE_Y - BALL_RADIUS - 1,
-    vx: Math.cos(angle) * BALL_SPEED,
-    vy: Math.sin(angle) * BALL_SPEED,
+    vx: Math.cos(startAngle) * BALL_SPEED,
+    vy: Math.sin(startAngle) * BALL_SPEED,
   };
 
   let paddleX = ball.x;
+  let paddleTargetX = ball.x;
   const frames: SimFrame[] = [];
   let t = 0;
   let lastRecordedBallX = ball.x;
   let lastRecordedBallY = ball.y;
+  let consecutiveMisses = 0;
 
   // Record initial frame
   frames.push({
@@ -65,7 +106,7 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
     paddleX,
   });
 
-  while (activeBricks.size > 0 && t < MAX_DURATION) {
+  while (activeBricks.size > 0 && t < maxDuration) {
     t += DT;
 
     // Move ball
@@ -123,16 +164,53 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
       }
     }
 
-    // Paddle collision
-    if (ball.vy > 0 && ball.y + BALL_RADIUS >= PADDLE_Y && ball.y + BALL_RADIUS < PADDLE_Y + 16) {
+    // Paddle zone
+    if (ball.vy > 0 && ball.y + BALL_RADIUS >= PADDLE_Y) {
       const paddleLeft = paddleX - PADDLE_WIDTH / 2;
       const paddleRight = paddleX + PADDLE_WIDTH / 2;
-      if (ball.x >= paddleLeft && ball.x <= paddleRight) {
-        ball.y = PADDLE_Y - BALL_RADIUS;
-        const hitOffset = (ball.x - paddleX) / (PADDLE_WIDTH / 2);
 
-        // In targeting phase, aim at remaining bricks
-        if (activeBricks.size < totalBricks * TARGET_PHASE_THRESHOLD && activeBricks.size > 0) {
+      if (ball.x >= paddleLeft - 2 && ball.x <= paddleRight + 2) {
+        // Ball hit the paddle — angle depends on where it hit
+        ball.y = PADDLE_Y - BALL_RADIUS;
+        consecutiveMisses = 0;
+
+        // Normalize hit position to [-1, 1] (left edge to right edge)
+        const hitPos = (ball.x - paddleX) / (PADDLE_WIDTH / 2);
+        const clampedHit = Math.max(-1, Math.min(1, hitPos));
+
+        // Map to angle: center → straight up (PI/2), edges → sharper angles
+        const bounceAngle = PADDLE_MIN_ANGLE + (1 - clampedHit) / 2 * (PADDLE_MAX_ANGLE - PADDLE_MIN_ANGLE);
+        let newVx = Math.cos(bounceAngle) * BALL_SPEED;
+        let newVy = -Math.sin(bounceAngle) * BALL_SPEED;
+
+        // Subtle aiming: bias bounce direction toward nearest brick
+        // Simulates a skilled player angling their paddle intentionally
+        const timeProgress = t / maxDuration;
+        const target = findNearestBrick(ball.x, ball.y, activeBricks);
+        if (target) {
+          const tdx = (target.x + CELL_SIZE / 2) - ball.x;
+          const tdy = (target.y + CELL_SIZE / 2) - ball.y;
+          const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
+          const aimVx = (tdx / tdist) * BALL_SPEED;
+          const aimVy = (tdy / tdist) * BALL_SPEED;
+          // Aiming strength: subtle early on, stronger as game progresses
+          const aimBlend = 0.15 + timeProgress * 0.25;
+          newVx = newVx * (1 - aimBlend) + aimVx * aimBlend;
+          newVy = newVy * (1 - aimBlend) + aimVy * aimBlend;
+        }
+
+        ball.vx = newVx;
+        ball.vy = newVy;
+
+        bounced = true;
+      } else if (ball.y + BALL_RADIUS >= FLOOR_Y) {
+        // Ball missed paddle and hit the invisible floor — bounce back up
+        ball.y = FLOOR_Y - BALL_RADIUS;
+        ball.vy = -Math.abs(ball.vy);
+        consecutiveMisses++;
+
+        // After misses or late in the game, gently steer toward bricks
+        if (consecutiveMisses >= 2 || t > maxDuration * 0.7) {
           const target = findNearestBrick(ball.x, ball.y, activeBricks);
           if (target) {
             const targetCX = target.x + CELL_SIZE / 2;
@@ -140,53 +218,16 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
             const tdx = targetCX - ball.x;
             const tdy = targetCY - ball.y;
             const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
-            ball.vx = (tdx / tdist) * BALL_SPEED;
-            ball.vy = (tdy / tdist) * BALL_SPEED;
+            // Blend current direction with target direction
+            const blend = consecutiveMisses >= 5 ? 0.8 : 0.5;
+            ball.vx = ball.vx * (1 - blend) + (tdx / tdist) * BALL_SPEED * blend;
+            ball.vy = ball.vy * (1 - blend) + (tdy / tdist) * BALL_SPEED * blend;
           }
-        } else {
-          // Normal bounce: blend paddle hit position with incoming direction
-          // hitOffset alone determines angle in classic Arkanoid, but looks
-          // unnatural when the ball reverses horizontal direction on contact.
-          // We mix 60% hit-position influence with 40% incoming-velocity
-          // reflection so the ball's horizontal direction stays plausible.
-          const baseAngle = -Math.PI / 2;
-          const angleRange = Math.PI / 3;
-          const positionAngle = baseAngle + hitOffset * angleRange;
-
-          // Reflect incoming angle (mirror vy, keep vx)
-          const incomingAngle = Math.atan2(-Math.abs(ball.vy), ball.vx);
-
-          const blendedAngle = positionAngle * 0.6 + incomingAngle * 0.4;
-
-          // Ensure ball always goes upward after paddle hit
-          ball.vx = Math.cos(blendedAngle) * BALL_SPEED;
-          ball.vy = -Math.abs(Math.sin(blendedAngle) * BALL_SPEED);
         }
 
         bounced = true;
       }
-    }
-
-    // Ball falls below paddle - reset immediately
-    // Use a tight threshold so no frames show the ball below the paddle
-    if (ball.y + BALL_RADIUS > PADDLE_Y + PADDLE_HEIGHT && ball.vy > 0) {
-      ball.y = PADDLE_Y - BALL_RADIUS;
-      ball.vy = -Math.abs(ball.vy);
-
-      // Aim at nearest brick on reset
-      if (activeBricks.size > 0) {
-        const target = findNearestBrick(ball.x, ball.y, activeBricks);
-        if (target) {
-          const targetCX = target.x + CELL_SIZE / 2;
-          const targetCY = target.y + CELL_SIZE / 2;
-          const tdx = targetCX - ball.x;
-          const tdy = targetCY - ball.y;
-          const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
-          ball.vx = (tdx / tdist) * BALL_SPEED;
-          ball.vy = (tdy / tdist) * BALL_SPEED;
-        }
-      }
-      bounced = true;
+      // else: ball is between paddle and floor, let it keep falling
     }
 
     // Normalize speed after any bounce
@@ -198,8 +239,25 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
       }
     }
 
-    // Paddle tracking
-    paddleX += (ball.x - paddleX) * PADDLE_LERP;
+    // Paddle AI: predict where the ball will land and move toward that point
+    const timeProgress = t / maxDuration;
+    if (ball.vy > 0) {
+      // Ball coming down — predict landing position
+      const predicted = predictBallX(ball, PADDLE_Y - BALL_RADIUS);
+      // Slight imprecision early on, precise later or after misses
+      const imprecision = consecutiveMisses >= 1 || timeProgress > 0.7 ? 0 : (rng() - 0.5) * 10;
+      paddleTargetX = predicted + imprecision;
+    }
+    // else: ball going up — keep moving toward last predicted target (anticipation)
+
+    // Paddle movement speed: variable lerp for more natural feel
+    // Faster when ball is close to paddle, slower when far away
+    const ballDistToPaddle = Math.abs(ball.y - PADDLE_Y);
+    const urgency = 1 - Math.min(1, ballDistToPaddle / 120);
+    const baseLerp = 0.08;
+    const urgentLerp = 0.22;
+    const lerpFactor = baseLerp + urgency * (urgentLerp - baseLerp);
+    paddleX += (paddleTargetX - paddleX) * lerpFactor;
     paddleX = Math.max(AREA_LEFT + PADDLE_WIDTH / 2, Math.min(AREA_RIGHT - PADDLE_WIDTH / 2, paddleX));
 
     // Record frame at bounces or brick hits
@@ -228,12 +286,12 @@ export function simulateArkanoid(grid: ContributionGrid): SimResult {
       lastRecordedBallX = ball.x;
       lastRecordedBallY = ball.y;
     } else {
-      // Record periodically for smooth paddle motion (every ~200ms)
+      // Record periodically for smooth motion (every ~40px of ball travel)
       const dist = Math.sqrt(
         (ball.x - lastRecordedBallX) ** 2 +
         (ball.y - lastRecordedBallY) ** 2
       );
-      if (dist > 80) {
+      if (dist > 40) {
         frames.push({
           time: t,
           ballX: ball.x,

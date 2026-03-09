@@ -56,7 +56,7 @@ export function renderSvg(
 
   // Root CSS variables
   parts.push(
-    `:root{--cb:${palette.border};--cs:${palette.accent};--ce:${palette.empty};` +
+    `:root{--cb:${palette.border};--cbl:${palette.ball};--cp:${palette.paddle};--ce:${palette.empty};--ch:${palette.hit};` +
     `--c0:${palette.levels[0]};--c1:${palette.levels[1]};--c2:${palette.levels[2]};` +
     `--c3:${palette.levels[3]};--c4:${palette.levels[4]}}`
   );
@@ -78,23 +78,27 @@ export function renderSvg(
     const hits = brickHitSequences.get(key);
 
     if (hits && hits.length > 0) {
-      // Build keyframes: brick starts at original level, transitions through
-      // each hit, finally disappears (or stays at reduced level if not fully destroyed)
+      // Build keyframes: brick starts at original level, flashes white on hit,
+      // then transitions to new color (or disappears)
       let kf = `@keyframes ${cls}{`;
 
       for (let i = 0; i < hits.length; i++) {
         const hit = hits[i];
         const p1 = hit.pct.toFixed(2);
-        const p2 = (hit.pct + 0.02).toFixed(2);
+        // Flash: brief white burst at moment of impact
+        const pFlash = (hit.pct + 0.01).toFixed(2);
+        const p2 = (hit.pct + 0.15).toFixed(2);
 
         // Just before the hit, brick is still at fromLevel
         kf += `${p1}%{fill:var(--c${hit.fromLevel})}`;
+        // White flash on impact
+        kf += `${pFlash}%{fill:var(--ch)}`;
 
         if (hit.toLevel <= 0) {
-          // Destroyed: transition to empty for the rest
+          // Destroyed: fade from flash to empty
           kf += `${p2}%,100%{fill:var(--ce)}`;
         } else {
-          // Damaged: transition to lower level, hold until next hit
+          // Damaged: flash resolves to new level color
           kf += `${p2}%{fill:var(--c${hit.toLevel})}`;
         }
       }
@@ -120,7 +124,7 @@ export function renderSvg(
     return true; // keep all recorded frames (already filtered in simulation)
   });
 
-  parts.push(`.ball{fill:var(--cs);animation:ball-move ${dur}ms linear infinite}`);
+  parts.push(`.ball{fill:var(--cbl);animation:ball-move ${dur}ms linear infinite}`);
   parts.push(`@keyframes ball-move{`);
   for (const frame of ballFrames) {
     const pct = ((frame.time / dur) * 100).toFixed(2);
@@ -130,7 +134,7 @@ export function renderSvg(
 
   // Paddle keyframes
   parts.push(
-    `.paddle{fill:var(--cs);animation:paddle-move ${dur}ms linear infinite}`
+    `.paddle{fill:var(--cp);animation:paddle-move ${dur}ms linear infinite}`
   );
   parts.push(`@keyframes paddle-move{`);
   for (const frame of ballFrames) {

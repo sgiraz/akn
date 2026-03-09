@@ -19944,12 +19944,36 @@ function countToLevel(count) {
 
 // src/simulation.ts
 var DT = 6;
-var BALL_SPEED = 5;
-var MAX_DURATION = 6e4;
-var PADDLE_LERP = 0.12;
-var TARGET_PHASE_THRESHOLD = 0.3;
+var BALL_SPEED = 3.5;
+var FLOOR_Y = PADDLE_Y + 20;
+var PADDLE_MIN_ANGLE = Math.PI * 0.15;
+var PADDLE_MAX_ANGLE = Math.PI * 0.85;
+function createRng(seed) {
+  let s = seed;
+  return () => {
+    s = s * 1664525 + 1013904223 & 4294967295;
+    return (s >>> 0) / 4294967295;
+  };
+}
+function computeMaxDuration(totalBricks, totalHP) {
+  const estimate = totalBricks * 800 + totalHP * 200;
+  return Math.max(3e4, Math.min(12e4, estimate));
+}
+function predictBallX(ball, targetY) {
+  if (ball.vy <= 0) return ball.x;
+  const dt = (targetY - ball.y) / ball.vy;
+  let px = ball.x + ball.vx * dt;
+  const width = AREA_RIGHT - AREA_LEFT - BALL_RADIUS * 2;
+  const left = AREA_LEFT + BALL_RADIUS;
+  px -= left;
+  const cycle = width * 2;
+  px = (px % cycle + cycle) % cycle;
+  if (px > width) px = cycle - px;
+  return px + left;
+}
 function simulateArkanoid(grid) {
   const activeBricks = /* @__PURE__ */ new Map();
+  let totalHP = 0;
   for (let col = 0; col < COLS; col++) {
     for (let row = 0; row < ROWS; row++) {
       const cell = grid[col][row];
@@ -19963,6 +19987,7 @@ function simulateArkanoid(grid) {
           x: cellX(col),
           y: cellY(row)
         });
+        totalHP += cell.level;
       }
     }
   }
@@ -19970,25 +19995,29 @@ function simulateArkanoid(grid) {
   if (totalBricks === 0) {
     return { frames: [], duration: 1e3 };
   }
-  const angle = -Math.PI / 3;
+  const maxDuration = computeMaxDuration(totalBricks, totalHP);
+  const rng = createRng(totalHP * 7 + totalBricks * 13);
+  const startAngle = -Math.PI / 2 + (rng() - 0.5) * 0.4;
   const ball = {
     x: (AREA_LEFT + AREA_RIGHT) / 2,
     y: PADDLE_Y - BALL_RADIUS - 1,
-    vx: Math.cos(angle) * BALL_SPEED,
-    vy: Math.sin(angle) * BALL_SPEED
+    vx: Math.cos(startAngle) * BALL_SPEED,
+    vy: Math.sin(startAngle) * BALL_SPEED
   };
   let paddleX = ball.x;
+  let paddleTargetX = ball.x;
   const frames = [];
   let t = 0;
   let lastRecordedBallX = ball.x;
   let lastRecordedBallY = ball.y;
+  let consecutiveMisses = 0;
   frames.push({
     time: 0,
     ballX: ball.x,
     ballY: ball.y,
     paddleX
   });
-  while (activeBricks.size > 0 && t < MAX_DURATION) {
+  while (activeBricks.size > 0 && t < maxDuration) {
     t += DT;
     ball.x += ball.vx;
     ball.y += ball.vy;
@@ -20030,13 +20059,37 @@ function simulateArkanoid(grid) {
         break;
       }
     }
-    if (ball.vy > 0 && ball.y + BALL_RADIUS >= PADDLE_Y && ball.y + BALL_RADIUS < PADDLE_Y + 16) {
+    if (ball.vy > 0 && ball.y + BALL_RADIUS >= PADDLE_Y) {
       const paddleLeft = paddleX - PADDLE_WIDTH / 2;
       const paddleRight = paddleX + PADDLE_WIDTH / 2;
-      if (ball.x >= paddleLeft && ball.x <= paddleRight) {
+      if (ball.x >= paddleLeft - 2 && ball.x <= paddleRight + 2) {
         ball.y = PADDLE_Y - BALL_RADIUS;
-        const hitOffset = (ball.x - paddleX) / (PADDLE_WIDTH / 2);
-        if (activeBricks.size < totalBricks * TARGET_PHASE_THRESHOLD && activeBricks.size > 0) {
+        consecutiveMisses = 0;
+        const hitPos = (ball.x - paddleX) / (PADDLE_WIDTH / 2);
+        const clampedHit = Math.max(-1, Math.min(1, hitPos));
+        const bounceAngle = PADDLE_MIN_ANGLE + (1 - clampedHit) / 2 * (PADDLE_MAX_ANGLE - PADDLE_MIN_ANGLE);
+        let newVx = Math.cos(bounceAngle) * BALL_SPEED;
+        let newVy = -Math.sin(bounceAngle) * BALL_SPEED;
+        const timeProgress2 = t / maxDuration;
+        const target = findNearestBrick(ball.x, ball.y, activeBricks);
+        if (target) {
+          const tdx = target.x + CELL_SIZE / 2 - ball.x;
+          const tdy = target.y + CELL_SIZE / 2 - ball.y;
+          const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
+          const aimVx = tdx / tdist * BALL_SPEED;
+          const aimVy = tdy / tdist * BALL_SPEED;
+          const aimBlend = 0.15 + timeProgress2 * 0.25;
+          newVx = newVx * (1 - aimBlend) + aimVx * aimBlend;
+          newVy = newVy * (1 - aimBlend) + aimVy * aimBlend;
+        }
+        ball.vx = newVx;
+        ball.vy = newVy;
+        bounced = true;
+      } else if (ball.y + BALL_RADIUS >= FLOOR_Y) {
+        ball.y = FLOOR_Y - BALL_RADIUS;
+        ball.vy = -Math.abs(ball.vy);
+        consecutiveMisses++;
+        if (consecutiveMisses >= 2 || t > maxDuration * 0.7) {
           const target = findNearestBrick(ball.x, ball.y, activeBricks);
           if (target) {
             const targetCX = target.x + CELL_SIZE / 2;
@@ -20044,37 +20097,13 @@ function simulateArkanoid(grid) {
             const tdx = targetCX - ball.x;
             const tdy = targetCY - ball.y;
             const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
-            ball.vx = tdx / tdist * BALL_SPEED;
-            ball.vy = tdy / tdist * BALL_SPEED;
+            const blend = consecutiveMisses >= 5 ? 0.8 : 0.5;
+            ball.vx = ball.vx * (1 - blend) + tdx / tdist * BALL_SPEED * blend;
+            ball.vy = ball.vy * (1 - blend) + tdy / tdist * BALL_SPEED * blend;
           }
-        } else {
-          const baseAngle = -Math.PI / 2;
-          const angleRange = Math.PI / 3;
-          const positionAngle = baseAngle + hitOffset * angleRange;
-          const incomingAngle = Math.atan2(-Math.abs(ball.vy), ball.vx);
-          const blendedAngle = positionAngle * 0.6 + incomingAngle * 0.4;
-          ball.vx = Math.cos(blendedAngle) * BALL_SPEED;
-          ball.vy = -Math.abs(Math.sin(blendedAngle) * BALL_SPEED);
         }
         bounced = true;
       }
-    }
-    if (ball.y + BALL_RADIUS > PADDLE_Y + PADDLE_HEIGHT && ball.vy > 0) {
-      ball.y = PADDLE_Y - BALL_RADIUS;
-      ball.vy = -Math.abs(ball.vy);
-      if (activeBricks.size > 0) {
-        const target = findNearestBrick(ball.x, ball.y, activeBricks);
-        if (target) {
-          const targetCX = target.x + CELL_SIZE / 2;
-          const targetCY = target.y + CELL_SIZE / 2;
-          const tdx = targetCX - ball.x;
-          const tdy = targetCY - ball.y;
-          const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
-          ball.vx = tdx / tdist * BALL_SPEED;
-          ball.vy = tdy / tdist * BALL_SPEED;
-        }
-      }
-      bounced = true;
     }
     if (bounced) {
       const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
@@ -20083,7 +20112,18 @@ function simulateArkanoid(grid) {
         ball.vy = ball.vy / speed * BALL_SPEED;
       }
     }
-    paddleX += (ball.x - paddleX) * PADDLE_LERP;
+    const timeProgress = t / maxDuration;
+    if (ball.vy > 0) {
+      const predicted = predictBallX(ball, PADDLE_Y - BALL_RADIUS);
+      const imprecision = consecutiveMisses >= 1 || timeProgress > 0.7 ? 0 : (rng() - 0.5) * 10;
+      paddleTargetX = predicted + imprecision;
+    }
+    const ballDistToPaddle = Math.abs(ball.y - PADDLE_Y);
+    const urgency = 1 - Math.min(1, ballDistToPaddle / 120);
+    const baseLerp = 0.08;
+    const urgentLerp = 0.22;
+    const lerpFactor = baseLerp + urgency * (urgentLerp - baseLerp);
+    paddleX += (paddleTargetX - paddleX) * lerpFactor;
     paddleX = Math.max(AREA_LEFT + PADDLE_WIDTH / 2, Math.min(AREA_RIGHT - PADDLE_WIDTH / 2, paddleX));
     if (hitBrick) {
       frames.push({
@@ -20113,7 +20153,7 @@ function simulateArkanoid(grid) {
       const dist = Math.sqrt(
         (ball.x - lastRecordedBallX) ** 2 + (ball.y - lastRecordedBallY) ** 2
       );
-      if (dist > 80) {
+      if (dist > 40) {
         frames.push({
           time: t,
           ballX: ball.x,
@@ -20199,7 +20239,7 @@ function renderSvg(grid, sim, palette) {
   }
   parts.push("<style>");
   parts.push(
-    `:root{--cb:${palette.border};--cs:${palette.accent};--ce:${palette.empty};--c0:${palette.levels[0]};--c1:${palette.levels[1]};--c2:${palette.levels[2]};--c3:${palette.levels[3]};--c4:${palette.levels[4]}}`
+    `:root{--cb:${palette.border};--cbl:${palette.ball};--cp:${palette.paddle};--ce:${palette.empty};--ch:${palette.hit};--c0:${palette.levels[0]};--c1:${palette.levels[1]};--c2:${palette.levels[2]};--c3:${palette.levels[3]};--c4:${palette.levels[4]}}`
   );
   parts.push(
     `.c{shape-rendering:geometricPrecision;fill:var(--ce);stroke-width:1px;stroke:var(--cb);animation:none ${dur}ms linear infinite;width:${CELL_SIZE}px;height:${CELL_SIZE}px}`
@@ -20215,8 +20255,10 @@ function renderSvg(grid, sim, palette) {
       for (let i = 0; i < hits.length; i++) {
         const hit = hits[i];
         const p1 = hit.pct.toFixed(2);
-        const p2 = (hit.pct + 0.02).toFixed(2);
+        const pFlash = (hit.pct + 0.01).toFixed(2);
+        const p2 = (hit.pct + 0.15).toFixed(2);
         kf += `${p1}%{fill:var(--c${hit.fromLevel})}`;
+        kf += `${pFlash}%{fill:var(--ch)}`;
         if (hit.toLevel <= 0) {
           kf += `${p2}%,100%{fill:var(--ce)}`;
         } else {
@@ -20236,7 +20278,7 @@ function renderSvg(grid, sim, palette) {
     if (f.brickHit) return true;
     return true;
   });
-  parts.push(`.ball{fill:var(--cs);animation:ball-move ${dur}ms linear infinite}`);
+  parts.push(`.ball{fill:var(--cbl);animation:ball-move ${dur}ms linear infinite}`);
   parts.push(`@keyframes ball-move{`);
   for (const frame of ballFrames) {
     const pct = (frame.time / dur * 100).toFixed(2);
@@ -20244,7 +20286,7 @@ function renderSvg(grid, sim, palette) {
   }
   parts.push(`}`);
   parts.push(
-    `.paddle{fill:var(--cs);animation:paddle-move ${dur}ms linear infinite}`
+    `.paddle{fill:var(--cp);animation:paddle-move ${dur}ms linear infinite}`
   );
   parts.push(`@keyframes paddle-move{`);
   for (const frame of ballFrames) {
@@ -20313,13 +20355,17 @@ var PALETTES = {
   "github-light": {
     empty: "#ebedf0",
     border: "#1b1f230a",
-    accent: "purple",
+    ball: "#e34a33",
+    paddle: "#5b21b6",
+    hit: "#ffffff",
     levels: ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
   },
   "github-dark": {
     empty: "#161b22",
     border: "#1b1f230a",
-    accent: "#58a6ff",
+    ball: "#ff6b6b",
+    paddle: "#a78bfa",
+    hit: "#ffffff",
     levels: ["#161b22", "#0e4429", "#006d32", "#26a641", "#39d353"]
   }
 };

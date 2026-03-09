@@ -36,7 +36,9 @@ export interface SimResult {
 export interface Palette {
   empty: string;
   border: string;
-  accent: string;
+  ball: string;
+  paddle: string;
+  hit: string;     // flash color on brick impact
   levels: [string, string, string, string, string];
 }
 
