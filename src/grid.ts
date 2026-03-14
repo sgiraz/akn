@@ -1,4 +1,4 @@
-export const COLS = 52;
+export const COLS = 53;
 export const ROWS = 7;
 export const CELL_SIZE = 12;
 export const CELL_SPACING = 16;
@@ -7,7 +7,7 @@ export const CELL_RX = 2;
 
 export const VIEWBOX_X = -16;
 export const VIEWBOX_Y = -32;
-export const VIEWBOX_W = 880;
+export const VIEWBOX_W = 896;
 export const VIEWBOX_H = 200;
 
 // Play area bounds
